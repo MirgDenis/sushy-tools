@@ -1,0 +1,7 @@
+{
+    "@odata.id": {{ "/redfish/v1/Managers/%s/NetworkProtocol"|format(identity)|tojson }},
+    "@odata.type": "#ManagerNetworkProtocol.v1_7_0.ManagerNetworkProtocol",
+    "IPMI": {
+        "ProtocolEnabled": true
+    }
+}

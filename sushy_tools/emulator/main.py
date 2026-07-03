@@ -482,6 +482,12 @@ def jsonify(obj_type, obj_version, obj):
     return flask.jsonify(obj)
 
 
+@app.route('/redfish/v1/Managers/<identity>/NetworkProtocol', methods=['GET'])
+@api_utils.returns_json
+def net_protocol_resource(identity):
+    return app.render_template('net_protocol.json', identity=identity)
+
+
 @app.route('/redfish/v1/Managers/<identity>', methods=['GET', 'PATCH'])
 @api_utils.returns_json
 def manager_resource(identity):
@@ -533,6 +539,9 @@ def manager_resource(identity):
                     datetime.now().strftime('%Y-%m-%dT%H:%M:%S+00:00')),
                 "DateTimeLocalOffset": dt_info.get(
                     "DateTimeLocalOffset", "+00:00"),
+                "EthernetInterfaces": {
+                    "@odata.id": "/redfish/v1/Managers/%s/EthernetInterfaces" % identity
+                },
                 "Status": {
                     "State": "Enabled",
                     "Health": "OK"
@@ -789,6 +798,21 @@ def ethernet_interfaces_collection(identity):
         nics=nics)
 
 
+@app.route('/redfish/v1/Managers/<identity>/EthernetInterfaces',
+           methods=['GET'])
+@api_utils.ensure_instance_access
+@api_utils.returns_json
+def ethernet_interfaces_collection_managers(identity):
+    if app.feature_set == "minimum":
+        raise error.FeatureNotAvailable("EthernetInterfaces")
+
+    nics = app.systems.get_nics(identity)
+
+    return app.render_template(
+        'ethernet_interfaces_collection.json', identity=identity,
+        nics=nics)
+
+
 @app.route('/redfish/v1/Systems/<identity>/EthernetInterfaces/<nic_id>',
            methods=['GET'])
 @api_utils.ensure_instance_access
@@ -845,6 +869,36 @@ def processor(identity, processor_id):
 @api_utils.ensure_instance_access
 @api_utils.returns_json
 def system_reset_action(identity):
+    reset_type = flask.request.json.get('ResetType')
+    if app.config.get('SUSHY_EMULATOR_DISABLE_POWER_OFF') is True and \
+            reset_type in ('ForceOff', 'GracefulShutdown'):
+        raise error.BadRequest('Can not request power off transition. It is '
+                               'disabled via the '
+                               'SUSHY_EMULATOR_DISABLE_POWER_OFF configuration'
+                               'option.')
+
+    if reset_type in ('On', 'ForceOn', 'ForceRestart', 'GracefulRestart'):
+        try:
+            app.systems.apply_pending_bios(identity)
+        except error.NotSupportedError:
+            pass
+        try:
+            app.systems.apply_pending_versions(identity)
+        except error.NotSupportedError:
+            pass
+
+    app.systems.set_power_state(identity, reset_type)
+
+    app.logger.info('System "%s" power state set to "%s"',
+                    identity, reset_type)
+
+    return '', 204
+
+@app.route('/redfish/v1/Managers/<identity>/Actions/Manager.Reset',
+           methods=['POST'])
+@api_utils.ensure_instance_access
+@api_utils.returns_json
+def system_reset_action_managers(identity):
     reset_type = flask.request.json.get('ResetType')
     if app.config.get('SUSHY_EMULATOR_DISABLE_POWER_OFF') is True and \
             reset_type in ('ForceOff', 'GracefulShutdown'):
