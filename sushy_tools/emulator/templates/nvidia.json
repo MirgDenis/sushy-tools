@@ -1,0 +1,6 @@
+{
+    "@odata.id": {{ "/redfish/v1/Systems/%s/Oem/Nvidia"|format(identity)|tojson }},
+    "@odata.type": "#NvidiaComputerSystem.v1_0_0.NvidiaComputerSystem",
+    "BaseMAC": "5c257308f352",
+    "Mode": "DpuMode"
+}

@@ -31,6 +31,22 @@ def update_service_resource():
     )
 
 
+@update_service.route('/FirmwareInventory', methods=['GET'])
+@api_utils.returns_json
+def firmware_inventory_collection():
+    # Stub: advertise an empty firmware inventory (no members).
+    api_utils.debug('Serving firmware inventory (stub, empty collection)')
+    return flask.render_template('firmware_inventory_collection.json')
+
+
+@update_service.route('/FirmwareInventory/BMC_Firmware', methods=['GET'])
+@api_utils.returns_json
+def bmc_firmware():
+    # Stub: advertise an empty firmware inventory (no members).
+    api_utils.debug('Serving firmware inventory (stub, empty collection)')
+    return flask.render_template('bmc_firmware.json')
+
+
 @update_service.route('/Actions/UpdateService.SimpleUpdate',
                       methods=['POST'])
 @api_utils.returns_json

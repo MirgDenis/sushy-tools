@@ -1,0 +1,7 @@
+{
+    "@odata.id": "/redfish/v1/System/Bluefield/EthernetInterfaces/oob0",
+    "@odata.type": "#EthernetInterface.v1_6_0.EthernetInterface",
+    "Id": "oob0",
+    "Name": "Host Ethernet Interface",
+    "MACAddress": "02:00:00:00:00:02"
+}

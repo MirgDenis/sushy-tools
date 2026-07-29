@@ -145,9 +145,22 @@ class Application(flask.Flask):
         return (self.config.get('SUSHY_EMULATOR_VENDOR')
                 or os.environ.get('SUSHY_EMULATOR_VENDOR'))
 
+    @property
+    def oem_nvidia(self):
+        return (self.config.get('SUSHY_EMULATOR_OEM_NVIDIA')
+                or os.environ.get('SUSHY_EMULATOR_OEM_NVIDIA'))
+
+    @property
+    def manufacturer(self):
+        return (self.config.get('SUSHY_EMULATOR_MANUFACTURER')
+                or os.environ.get('SUSHY_EMULATOR_MANUFACTURER')
+                or "Sushy Emulator")
+
     def render_template(self, template_name, /, **params):
         params.setdefault('feature_set', self.feature_set)
         params.setdefault('vendor', self.vendor)
+        params.setdefault('oem_nvidia', self.oem_nvidia)
+        params.setdefault('manufacturer', self.manufacturer)
         return flask.render_template(template_name, **params)
 
     @property
@@ -677,6 +690,155 @@ def ethernet_interfaces_collection(identity):
         nics=nics)
 
 
+@app.route('/redfish/v1/Systems/<identity>/Oem/Nvidia',
+           methods=['GET'])
+@api_utils.ensure_instance_access
+@api_utils.returns_json
+def oem_nvidia(identity):
+    if app.config.get('SUSHY_EMULATOR_OEM_NVIDIA'):
+        return app.render_template('nvidia.json', identity=identity)
+    else:
+        raise error.FeatureNotAvailable("Oem/Nvidia")
+
+
+@app.route('/redfish/v1/Systems/<identity>/Settings',
+           methods=['PATCH'])
+@api_utils.ensure_instance_access
+@api_utils.returns_json
+def system_settings(identity):
+    boot = flask.request.json.get('Boot')
+    if not boot:
+        return ('PATCH only works for Boot'), 400
+
+    if boot:
+        target = boot.get('BootSourceOverrideTarget')
+        mode = boot.get('BootSourceOverrideMode')
+        enabled = boot.get('BootSourceOverrideEnabled')
+        http_uri = boot.get('HttpBootUri')
+
+        # Clean up HttpBootUri media if boot target changes
+        # away from HTTP boot. This mimics real BMC behavior
+        # where HTTP boot is typically one-time.
+        try:
+            previous_http_uri = app.systems.get_http_boot_uri(
+                identity)
+        except Exception:
+            previous_http_uri = None
+
+        if (previous_http_uri and target
+                and target not in ['UefiHttp', 'Cd']):
+            app.logger.info(
+                'Boot target changed to %s, cleaning up '
+                'HttpBootUri media for system %s',
+                target, identity)
+            try:
+                app.systems.set_boot_image(
+                    identity, 'Cd', boot_image=None)
+                app.systems.set_http_boot_uri(None)
+            except Exception as e:
+                app.logger.warning(
+                    'Failed to clean up HttpBootUri '
+                    'media for system %s: %s',
+                    identity, e)
+
+        if http_uri and target == 'UefiHttp':
+
+            try:
+                # Download the image
+                image_path = app.vmedia.insert_image(
+                    identity, 'Cd', http_uri)
+            except Exception as e:
+                app.logger.error('Unable to insert image for HttpBootUri '
+                                 'request processing. Error: %s', e)
+                return 'Failed to download and attach HttpBootUri.', 400
+            try:
+                # Mount it as an ISO
+                app.systems.set_boot_image(
+                    uuid,
+                    'Cd', boot_image=image_path,
+                    write_protected=True)
+                # Set it for our emulator's API surface to return it
+                # if queried.
+            except Exception as e:
+                app.logger.error('Unable to attach HttpBootUri for boot '
+                                 'operation. Error: %s', e)
+                return (('Failed to set the supplied media as the next '
+                         'bootdevice.'), 400)
+            try:
+                app.systems.set_http_boot_uri(http_uri)
+            except Exception as e:
+                app.logger.error('Unable to record HttpBootUri for boot '
+                                 'operation. Error: %s', e)
+                return 'Failed to save HttpBootUri field value.', 400
+            # Explicitly set to CD as in this case we will boot a an iso
+            # image provided, not precisely the same, but BMC facilitated
+            # HTTPBoot is a little different and the overall functionality
+            # test is more important.
+            target = 'Cd'
+
+        if target == 'UefiHttp' and not http_uri:
+            # Reset to Pxe, in our case, since we can't force override
+            # the network boot to a specific URL. This is sort of a hack
+            # but testing functionality overall is a bit more important.
+            target = 'Pxe'
+
+        # Handle explicit clearing of HttpBootUri
+        if ('HttpBootUri' in boot
+                and not http_uri and previous_http_uri):
+            app.logger.info(
+                'HttpBootUri cleared, ejecting media '
+                'for system %s', identity)
+            try:
+                app.systems.set_boot_image(
+                    identity, 'Cd', boot_image=None)
+                app.systems.set_http_boot_uri(None)
+            except Exception as e:
+                app.logger.warning(
+                    'Failed to eject HttpBootUri '
+                    'media for system %s: %s',
+                    identity, e)
+
+        if target:
+            app.systems.set_boot_device(identity, target)
+
+            # BootSourceOverrideEnabled=Once -> arm libvirt boot-once.
+            if enabled == 'Once':
+                app.systems.mark_boot_once(identity)
+            else:
+                app.systems.clear_boot_once(identity)
+
+            app.logger.info('Set boot device to "%s" for system "%s"',
+                            target, identity)
+
+        if mode:
+            app.systems.set_boot_mode(identity, mode)
+
+            app.logger.info('Set boot mode to "%s" for system "%s"',
+                            mode, identity)
+
+        if not target and not mode and not http_uri:
+            return ('Missing the BootSourceOverrideTarget and/or '
+                    'BootSourceOverrideMode and/or HttpBootUri '
+                    'element', 400)
+
+    return '', 204
+
+
+@app.route('/redfish/v1/Managers/<identity>/EthernetInterfaces',
+           methods=['GET'])
+@api_utils.ensure_instance_access
+@api_utils.returns_json
+def ethernet_interfaces_collection_managers(identity):
+    if app.feature_set == "minimum":
+        raise error.FeatureNotAvailable("EthernetInterfaces")
+
+    nics = app.systems.get_nics(identity)
+
+    return app.render_template(
+        'ethernet_interfaces_collection.json', identity=identity,
+        nics=nics)
+
+
 @app.route('/redfish/v1/Systems/<identity>/EthernetInterfaces/<nic_id>',
            methods=['GET'])
 @api_utils.ensure_instance_access
@@ -693,6 +855,13 @@ def ethernet_interface(identity, nic_id):
                 'ethernet_interface.json', identity=identity, nic=nic)
 
     raise error.NotFound()
+
+@app.route('/redfish/v1/Systems/<identity>/EthernetInterfaces/oob0',
+           methods=['GET'])
+@api_utils.ensure_instance_access
+@api_utils.returns_json
+def oob(identity):
+    return app.render_template('oob.json')
 
 
 @app.route('/redfish/v1/Systems/<identity>/Processors',

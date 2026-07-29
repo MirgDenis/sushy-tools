@@ -4,6 +4,9 @@
     "Description": "Virtual NICs",
     "Members@odata.count": {{ nics|length }},
     "Members": [
+                {
+                    "@odata.id": {{ "/redfish/v1/Systems/%s/EthernetInterfaces/oob0"|format(identity)|tojson }}
+                },
         {% for nic in nics %}
                 {
                     "@odata.id": {{ "/redfish/v1/Systems/%s/EthernetInterfaces/%s"|format(identity, nic.id)|tojson }}

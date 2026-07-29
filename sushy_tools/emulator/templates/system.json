@@ -4,15 +4,22 @@
     "Name": {{ name|string|tojson }},
     "UUID": {{ uuid|string|tojson }},
     {%- if feature_set == "full" %}
-    "Manufacturer": "Sushy Emulator",
+    "Manufacturer": {{ manufacturer|string|tojson }},
     "Status": {
         "State": "Enabled",
         "Health": "OK",
         "HealthRollUp": "OK"
     },
-    {% endif %}
+    {%- endif %}
     {%- if power_state %}
     "PowerState": {{ power_state|string|tojson }},
+    {%- endif %}
+    {%- if oem_nvidia %}
+    "Oem": {
+        "Nvidia": {
+            "@odata.id": {{ "/redfish/v1/Systems/%s/Oem/Nvidia"|format(identity)|tojson }}
+        }
+    },
     {%- endif %}
     "Boot": {
         {%- if boot_source_target %}

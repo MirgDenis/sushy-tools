@@ -192,6 +192,14 @@ class LibvirtDriver(AbstractSystemsDriver):
         cls.STORAGE_POOL = cls._config.get(
             'SUSHY_EMULATOR_STORAGE_POOL', cls.STORAGE_POOL)
         cls._http_boot_uri = None
+        cls.SUSHY_EMULATOR_ALLOWED_INSTANCES = cls._config.get(
+            'SUSHY_EMULATOR_ALLOWED_INSTANCES', None)
+
+        # Start the boot-once reboot listener once, if enabled.
+        if cls.SUSHY_EMULATOR_BOOT_ONCE and cls._boot_once_monitor is None:
+            cls._boot_once_monitor = boot_once.BootOnceMonitor(cls(), logger)
+            cls._boot_once_monitor.start()
+
         return cls
 
     @memoize.memoize()
@@ -247,6 +255,11 @@ class LibvirtDriver(AbstractSystemsDriver):
         :returns: list of UUIDs representing the systems
         """
         with libvirt_open(self._uri, readonly=True) as conn:
+            if self.SUSHY_EMULATOR_IDENTITY_AS_NAME:
+                if self.SUSHY_EMULATOR_ALLOWED_INSTANCES:
+                    return [domain.name() for domain in conn.listAllDomains() if domain.name() in self.SUSHY_EMULATOR_ALLOWED_INSTANCES]
+                else:
+                    return [domain.name() for domain in conn.listAllDomains()]
             return [domain.UUIDString() for domain in conn.listAllDomains()]
 
     def uuid(self, identity):
@@ -1374,9 +1387,80 @@ class LibvirtDriver(AbstractSystemsDriver):
         """
         domain = self._get_domain(identity, readonly=True)
         tree = ET.fromstring(domain.XMLDesc(libvirt.VIR_DOMAIN_XML_INACTIVE))
+<<<<<<< HEAD
         return [{'id': iface.get('address'), 'mac': iface.get('address')}
                 for iface in tree.findall(
                 ".//devices/interface/mac")]
+=======
+        # Map each PCI controller index to its own address. libvirt numbers a
+        # device's `bus` after the controller `index` that provides it, so this
+        # lets us walk the bridge chain when building a UEFI device path.
+        controllers = {}
+        for ctrl in tree.findall(".//devices/controller[@type='pci']"):
+            addr = ctrl.find("address[@type='pci']")
+            if ctrl.get('index') is not None and addr is not None:
+                controllers[int(ctrl.get('index'), 0)] = addr
+
+        nics = []
+        for iface in tree.findall(".//devices/interface"):
+            mac_element = iface.find('mac')
+            if mac_element is None:
+                continue
+            mac = mac_element.get('address')
+            alias_element  = iface.find('alias')
+            if alias_element is not None:
+                nic_id = alias_element.get('name')
+            else:
+                nic_id = mac
+            nic = {'id': nic_id, 'mac': mac}
+            uefi = self._uefi_device_path(
+                iface.find("address[@type='pci']"), controllers, mac)
+            if uefi:
+                nic['uefi_device_path'] = uefi
+            nics.append(nic)
+        return nics
+
+    @staticmethod
+    def _uefi_device_path(address, controllers, mac):
+        """Build a UEFI device path (PciRoot/Pci.../MAC) for an interface.
+
+        Walks the PCI bridge chain (libvirt controller index == bus number)
+        from the interface up to the root complex. Returns None when the
+        topology cannot be resolved (e.g. the interface has no PCI address).
+        """
+        if address is None:
+            return None
+        try:
+            pci_domain = int(address.get('domain', '0x0'), 0)
+            bus = int(address.get('bus', '0x0'), 0)
+            slot = int(address.get('slot', '0x0'), 0)
+            func = int(address.get('function', '0x0'), 0)
+        except (TypeError, ValueError):
+            return None
+
+        segments = []
+        seen = set()
+        while True:
+            segments.append((slot, func))
+            if bus == 0:
+                break
+            ctrl = controllers.get(bus)
+            if ctrl is None or bus in seen:
+                return None
+            seen.add(bus)
+            try:
+                bus = int(ctrl.get('bus', '0x0'), 0)
+                slot = int(ctrl.get('slot', '0x0'), 0)
+                func = int(ctrl.get('function', '0x0'), 0)
+            except (TypeError, ValueError):
+                return None
+
+        segments.reverse()
+        path = 'PciRoot(0x%x)' % pci_domain
+        for slot, func in segments:
+            path += '/Pci(0x%x,0x%x)' % (slot, func)
+        return path + '/MAC(%s,0x1)' % mac.replace(':', '').upper()
+>>>>>>> e2df541 (DPU-specific changes)
 
     def get_processors(self, identity):
         """Get list of processors
